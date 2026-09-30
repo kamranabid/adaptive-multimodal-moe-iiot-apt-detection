@@ -154,18 +154,11 @@ A single-class gate, where encountered, assigns all weight to that class. The sp
 
 The meta layer also computes a regularized logistic stacking probability $L_E$, pairwise rank score $P_E$, nonlinear hard-case probability $H_E$, and average $T_E$ of the two highest expert ranks. The pairwise logistic model learns from training-episode differences $z_{E^+}-z_{E^-}$, including sampled difficult negatives. The implemented integrated score is
 
-$$
-Z_E=\operatorname{clip}\left(
-0.42P_E+0.26L_E+0.14C_E+0.10M_E+0.05T_E+0.03H_E,
-0,1\right).
-$$
+
 
 The coefficients sum to one. This fixed combination is the output reported as **Proposed Multimodal MoE** in the final evidence. A logistic Platt calibrator is fitted using inner out-of-fold training scores:
 
-$$
-\hat p_E=\sigma\!\left(\alpha\operatorname{logit}\bigl(\operatorname{clip}(Z_E,\epsilon,1-\epsilon)\bigr)+\beta\right),
-\qquad \sigma(v)=\frac{1}{1+e^{-v}}.
-$$
+
 
 In the notebook, $\epsilon=10^{-6}$ for calibration. Calibration is refitted within each outer training fold before scoring held-out episodes. The primary reported AP, PR-AUC, and ROC-AUC use the pooled **out-of-fold integrated-score** predictions; they must not be replaced by the fold-selected alternative-head result or a different threshold profile.
 
@@ -173,40 +166,16 @@ In the notebook, $\epsilon=10^{-6}$ for calibration. Calibration is refitted wit
 
 For a probability threshold $\tau$, $\hat y_E(\tau)=\mathbf 1[\hat p_E\ge\tau]$. The original training-fold threshold policy searches observed candidate probabilities subject to $FPR\le0.02$ and precision $\ge0.70$, maximizing
 
-$$
-J(\tau)=0.50F_2(\tau)+0.30MCC(\tau)+0.20\operatorname{Precision}(\tau).
-$$
+
 
 If no threshold satisfies both constraints, the code first relaxes the precision condition while retaining the FPR condition. Its selected thresholds are learned on training folds and applied to their held-out episodes. A **separate post-cross-validation** analysis characterizes a balanced policy ($\tau=0.096005$) using pooled out-of-fold scores with precision $\ge0.85$, FPR $\le0.005$, and MCC as its objective. That balanced threshold is descriptive because selection used the evaluated pooled predictions.
 
-For confusion counts $TP,FP,FN,TN$, the principal threshold metrics are
 
-$$
-\operatorname{Precision}=\frac{TP}{TP+FP},\quad
-\operatorname{Recall}=\frac{TP}{TP+FN},\quad
-F_\beta=\frac{(1+\beta^2)TP}{(1+\beta^2)TP+\beta^2FN+FP},
-$$
 
-$$
-FPR=\frac{FP}{FP+TN},\quad
-\operatorname{BalancedAccuracy}=\frac12\left(\frac{TP}{TP+FN}+\frac{TN}{TN+FP}\right),
-$$
-
-$$
-MCC=\frac{TP\cdot TN-FP\cdot FN}
-{\sqrt{(TP+FP)(TP+FN)(TN+FP)(TN+FN)}}.
-$$
 
 AP summarizes precision at successive positive retrieval ranks; PR-AUC is trapezoidal area under the precision–recall curve. They use different numerical integration rules and need not be identical. ROC-AUC is the area under the true-positive-rate versus false-positive-rate curve. Calibration measures include
 
-$$
-\operatorname{Brier}=\frac1n\sum_{E=1}^{n}(\hat p_E-y_E)^2,
-\qquad
-\operatorname{ECE}=\sum_{b=1}^{B}\frac{|I_b|}{n}
-\left|\operatorname{acc}(I_b)-\operatorname{conf}(I_b)\right|,
-$$
 
-where the code uses **ten quantile-based bins** for ECE, with a fallback to equally spaced bins if necessary.
 
 ## Evaluation protocol
 
