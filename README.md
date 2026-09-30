@@ -1,5 +1,9 @@
-# adaptive-multimodal-moe-iiot-apt-detection
-Code for adaptive multimodal sparse Mixture-of-Experts APT detection in IIoT using network traffic and provenance data. Includes training, episode-level evaluation, statistical analysis, and figures.
+# Adaptive Multimodal Sparse Mixture-of-Experts for APT Detection in Industrial IoT
+
+Research code for episode-level advanced persistent threat (APT) detection using aligned Industrial Internet of Things (IIoT) network traffic and provenance information. The implementation is a Google Colab notebook that prepares the CICAPT-IIoT dataset, trains specialized experts, forms temporal episode representations, evaluates an integrated multimodal score, and produces statistical reports and figures.
+
+> **Research status.** The reported evaluation is dataset-wide, episode-grouped cross-validation. It is not an independent external test. The current retrospective episode-construction rule uses ground-truth labels; a live detector requires label-free episode segmentation and a new evaluation. The balanced operating threshold was characterized *after* cross-validation and must not be described as a held-out deployment result.
+
 ## Contents
 
 - [Research question](#research-question)
@@ -70,20 +74,50 @@ The paired feature set contains **119,896 five-second windows**, including **229
 
 ### 1. Aligned representations and experts
 
+For window $i$, let $x_i^{(N)}$ be network features, $x_i^{(P)}$ provenance features, and $x_i^{(T)}$ temporal features. The base inputs are
 
+$$
+X_i^{(N)}=x_i^{(N)},\qquad
+X_i^{(P)}=x_i^{(P)},\qquad
+X_i^{(F)}=[x_i^{(N)},x_i^{(P)}],\qquad
+X_i^{(TF)}=[x_i^{(N)},x_i^{(P)},x_i^{(T)}].
+$$
 
 Five classifiers produce window scores $s_{ie}\in[0,1]$ for experts $e\in\{N,P,F,TF,H\}$: Network, Provenance, Fusion, TemporalFusion, and HardNegative. The first four are `ExtraTreesClassifier` pipelines with median imputation, 160 trees, `max_features="sqrt"`, and balanced subsample weights. The Provenance expert uses `min_samples_leaf=2`; the other three use 1. The fifth expert uses fusion features and weighted training examples:
 
+$$
+w_i^{(H)}=
+\begin{cases}
+2, & y_i=1,\\
+3, & y_i=0\ \text{and}\ s_{iF}\ge Q_{0.90}(\{s_{jF}:y_j=0,\ j\in\mathcal T\}),\\
+1, & \text{otherwise},
+\end{cases}
+$$
 
-
+where $\mathcal T$ is the current training partition. The cutoff and weights are determined inside training data. Outer held-out windows are scored by experts fitted without their episodes. Inner episode-stratified folds provide out-of-fold base predictions to the meta models.
 
 ### 2. Retrospective episode construction
 
-Within each dataset phase, positive windows are sorted by time. 
+Within each dataset phase, positive windows are sorted by time. A positive window begins a new episode if it is more than **60 seconds** after the preceding positive window. A negative window at time $t_i$ is assigned to the phase-specific **300-second** bin $\lfloor t_i/300\rfloor$. For an episode $E$, its evaluation label is
+
+$$
+y_E=\max_{i\in E} y_i.
+$$
+
+**Interpretation:** these episode boundaries use $y_i$ and therefore depend on ground truth. They define a retrospective experiment, not a label-free online detector. A future deployment version must replace this rule, train and tune with the replacement, and evaluate it on independent data.
 
 ### 3. Episode-level temporal summaries
 
+Let $S_{E,e}=(s_{1e},\ldots,s_{|E|e})$ be the time-ordered scores of expert $e$ in episode $E$. The implementation records their maximum, top-three mean, 90th percentile, mean, standard deviation, early and late maxima, and linear time-index slope. Its robust summary is
 
+$$
+R_{E,e}=0.50\,\operatorname{mean}(\operatorname{top}_3 S_{E,e})
++0.20\,\max S_{E,e}
++0.20\,Q_{0.90}(S_{E,e})
++0.10\,\operatorname{mean}(S_{E,e}).
+$$
+
+For episodes with fewer than three windows, `top_3` uses all available scores. The recorded context statistics are passed to the meta layer. Training-fitted empirical rank maps transform each expert's robust score to $r_{E,e}\in[0,1]$; held-out episodes use the corresponding training map.
 
 ### 4. Expert competence, consensus, and sparse routing
 
@@ -124,11 +158,18 @@ A single-class gate, where encountered, assigns all weight to that class. The sp
 
 The meta layer also computes a regularized logistic stacking probability $L_E$, pairwise rank score $P_E$, nonlinear hard-case probability $H_E$, and average $T_E$ of the two highest expert ranks. The pairwise logistic model learns from training-episode differences $z_{E^+}-z_{E^-}$, including sampled difficult negatives. The implemented integrated score is
 
-
+$$
+Z_E=\operatorname{clip}\left(
+0.42P_E+0.26L_E+0.14C_E+0.10M_E+0.05T_E+0.03H_E,
+0,1\right).
+$$
 
 The coefficients sum to one. This fixed combination is the output reported as **Proposed Multimodal MoE** in the final evidence. A logistic Platt calibrator is fitted using inner out-of-fold training scores:
 
-
+$$
+\hat p_E=\sigma\!\left(\alpha\operatorname{logit}\bigl(\operatorname{clip}(Z_E,\epsilon,1-\epsilon)\bigr)+\beta\right),
+\qquad \sigma(v)=\frac{1}{1+e^{-v}}.
+$$
 
 In the notebook, $\epsilon=10^{-6}$ for calibration. Calibration is refitted within each outer training fold before scoring held-out episodes. The primary reported AP, PR-AUC, and ROC-AUC use the pooled **out-of-fold integrated-score** predictions; they must not be replaced by the fold-selected alternative-head result or a different threshold profile.
 
@@ -136,16 +177,40 @@ In the notebook, $\epsilon=10^{-6}$ for calibration. Calibration is refitted wit
 
 For a probability threshold $\tau$, $\hat y_E(\tau)=\mathbf 1[\hat p_E\ge\tau]$. The original training-fold threshold policy searches observed candidate probabilities subject to $FPR\le0.02$ and precision $\ge0.70$, maximizing
 
-
+$$
+J(\tau)=0.50F_2(\tau)+0.30MCC(\tau)+0.20\operatorname{Precision}(\tau).
+$$
 
 If no threshold satisfies both constraints, the code first relaxes the precision condition while retaining the FPR condition. Its selected thresholds are learned on training folds and applied to their held-out episodes. A **separate post-cross-validation** analysis characterizes a balanced policy ($\tau=0.096005$) using pooled out-of-fold scores with precision $\ge0.85$, FPR $\le0.005$, and MCC as its objective. That balanced threshold is descriptive because selection used the evaluated pooled predictions.
 
+For confusion counts $TP,FP,FN,TN$, the principal threshold metrics are
 
+$$
+\operatorname{Precision}=\frac{TP}{TP+FP},\quad
+\operatorname{Recall}=\frac{TP}{TP+FN},\quad
+F_\beta=\frac{(1+\beta^2)TP}{(1+\beta^2)TP+\beta^2FN+FP},
+$$
 
+$$
+FPR=\frac{FP}{FP+TN},\quad
+\operatorname{BalancedAccuracy}=\frac12\left(\frac{TP}{TP+FN}+\frac{TN}{TN+FP}\right),
+$$
+
+$$
+MCC=\frac{TP\cdot TN-FP\cdot FN}
+{\sqrt{(TP+FP)(TP+FN)(TN+FP)(TN+FN)}}.
+$$
 
 AP summarizes precision at successive positive retrieval ranks; PR-AUC is trapezoidal area under the precision–recall curve. They use different numerical integration rules and need not be identical. ROC-AUC is the area under the true-positive-rate versus false-positive-rate curve. Calibration measures include
 
+$$
+\operatorname{Brier}=\frac1n\sum_{E=1}^{n}(\hat p_E-y_E)^2,
+\qquad
+\operatorname{ECE}=\sum_{b=1}^{B}\frac{|I_b|}{n}
+\left|\operatorname{acc}(I_b)-\operatorname{conf}(I_b)\right|,
+$$
 
+where the code uses **ten quantile-based bins** for ECE, with a fallback to equally spaced bins if necessary.
 
 ## Evaluation protocol
 
@@ -206,4 +271,5 @@ The pooled probability diagnostics are Brier score **0.0033**, log loss **0.0221
 5. **Distinguish threshold protocols.** The balanced threshold was chosen post-CV on pooled predictions. For a prospective performance claim, lock the threshold on development data and evaluate it once on untouched data.
 6. **Resolve label-dependent episodes.** Ground-truth labels currently determine positive episode boundaries. Implement a label-free temporal/entity grouping rule and rerun the full pipeline before presenting this method as a deployable detector.
 7. **Report compute and environment.** Record Python/package versions, hardware, wall-clock time, memory use, and exact notebook revision. These are not fully specified in the current result package.
+
 
