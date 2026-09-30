@@ -70,50 +70,20 @@ The paired feature set contains **119,896 five-second windows**, including **229
 
 ### 1. Aligned representations and experts
 
-For window $i$, let $x_i^{(N)}$ be network features, $x_i^{(P)}$ provenance features, and $x_i^{(T)}$ temporal features. The base inputs are
 
-$$
-X_i^{(N)}=x_i^{(N)},\qquad
-X_i^{(P)}=x_i^{(P)},\qquad
-X_i^{(F)}=[x_i^{(N)},x_i^{(P)}],\qquad
-X_i^{(TF)}=[x_i^{(N)},x_i^{(P)},x_i^{(T)}].
-$$
 
 Five classifiers produce window scores $s_{ie}\in[0,1]$ for experts $e\in\{N,P,F,TF,H\}$: Network, Provenance, Fusion, TemporalFusion, and HardNegative. The first four are `ExtraTreesClassifier` pipelines with median imputation, 160 trees, `max_features="sqrt"`, and balanced subsample weights. The Provenance expert uses `min_samples_leaf=2`; the other three use 1. The fifth expert uses fusion features and weighted training examples:
 
-$$
-w_i^{(H)}=
-\begin{cases}
-2, & y_i=1,\\
-3, & y_i=0\ \text{and}\ s_{iF}\ge Q_{0.90}(\{s_{jF}:y_j=0,\ j\in\mathcal T\}),\\
-1, & \text{otherwise},
-\end{cases}
-$$
 
-where $\mathcal T$ is the current training partition. The cutoff and weights are determined inside training data. Outer held-out windows are scored by experts fitted without their episodes. Inner episode-stratified folds provide out-of-fold base predictions to the meta models.
+
 
 ### 2. Retrospective episode construction
 
-Within each dataset phase, positive windows are sorted by time. A positive window begins a new episode if it is more than **60 seconds** after the preceding positive window. A negative window at time $t_i$ is assigned to the phase-specific **300-second** bin $\lfloor t_i/300\rfloor$. For an episode $E$, its evaluation label is
-
-$$
-y_E=\max_{i\in E} y_i.
-$$
-
-**Interpretation:** these episode boundaries use $y_i$ and therefore depend on ground truth. They define a retrospective experiment, not a label-free online detector. A future deployment version must replace this rule, train and tune with the replacement, and evaluate it on independent data.
+Within each dataset phase, positive windows are sorted by time. 
 
 ### 3. Episode-level temporal summaries
 
-Let $S_{E,e}=(s_{1e},\ldots,s_{|E|e})$ be the time-ordered scores of expert $e$ in episode $E$. The implementation records their maximum, top-three mean, 90th percentile, mean, standard deviation, early and late maxima, and linear time-index slope. Its robust summary is
 
-$$
-R_{E,e}=0.50\,\operatorname{mean}(\operatorname{top}_3 S_{E,e})
-+0.20\,\max S_{E,e}
-+0.20\,Q_{0.90}(S_{E,e})
-+0.10\,\operatorname{mean}(S_{E,e}).
-$$
-
-For episodes with fewer than three windows, `top_3` uses all available scores. The recorded context statistics are passed to the meta layer. Training-fitted empirical rank maps transform each expert's robust score to $r_{E,e}\in[0,1]$; held-out episodes use the corresponding training map.
 
 ### 4. Expert competence, consensus, and sparse routing
 
